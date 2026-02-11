@@ -1,0 +1,11 @@
+.DS_Store
+.env
+
+# general ignore
+docs.private/
+test_documents/
+
+# python ignore
+.venv
+
+
