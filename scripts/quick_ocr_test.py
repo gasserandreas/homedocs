@@ -1,8 +1,8 @@
 """
 OCR Comparison Script
 =====================
-Runs three OCR methods on every PDF in a given folder and saves the results for
-manual comparison. Already-processed methods are skipped automatically per file.
+Runs four extraction methods on every PDF in a given folder and saves the results
+for manual comparison. Already-processed methods are skipped automatically per file.
 
 Usage (run from the project root):
     python scripts/quick_ocr_test.py <folder_with_pdfs>
@@ -12,6 +12,7 @@ Example:
 
 Output:
     Results are written to test_documents/results/<pdf-stem>/
+        native.txt      -- text extracted directly from PDF (fast; blank for scanned docs)
         tesseract.txt   -- text extracted by Tesseract (local, offline)
         vision_llm.txt  -- text extracted by Claude Vision (requires ANTHROPIC_API_KEY)
         docling.txt     -- text extracted by Docling (local, offline)
@@ -20,7 +21,7 @@ Output:
     the script will only fill in missing results.
 
 Requirements:
-    pip install pytesseract pdf2image anthropic python-dotenv docling
+    uv add pymupdf pytesseract pdf2image anthropic python-dotenv docling
     Tesseract must be installed on the system (brew install tesseract on macOS).
     ANTHROPIC_API_KEY must be set in a .env file or the environment.
 """
@@ -38,6 +39,36 @@ from pdf2image import convert_from_path
 from anthropic import Anthropic
 from anthropic.types import TextBlock
 import base64
+
+
+# Minimum characters across all pages to consider a PDF "native" (not scanned).
+_NATIVE_TEXT_MIN_CHARS = 100
+
+
+def extract_native_pdf(pdf_path: str) -> str:
+    """Extract embedded text directly from a PDF using PyMuPDF (no OCR).
+
+    Returns the extracted text with page markers. If the total character count is
+    below the threshold the result includes a warning that the file is likely scanned.
+    """
+    import fitz  # pymupdf
+    doc = fitz.open(pdf_path)
+    page_texts = [page.get_text() for page in doc]
+    doc.close()
+
+    total_chars = sum(len(t.strip()) for t in page_texts)
+    if total_chars < _NATIVE_TEXT_MIN_CHARS:
+        warning = (
+            f"[WARNING: only {total_chars} characters extracted — "
+            "this PDF appears to be scanned. Native extraction is unreliable.]\n\n"
+        )
+    else:
+        warning = ""
+
+    if len(page_texts) == 1:
+        return warning + page_texts[0]
+    body = "\n\n".join(f"--- Page {i} ---\n{text}" for i, text in enumerate(page_texts, start=1))
+    return warning + body
 
 
 def ocr_tesseract(pdf_path: str) -> str:
@@ -156,6 +187,7 @@ def process_pdf(pdf_path: str) -> None:
     result_dir = Path(f"test_documents/results/{pdf.stem}")
     result_dir.mkdir(parents=True, exist_ok=True)
 
+    _run_method("Native PDF", result_dir / "native.txt", extract_native_pdf, str(pdf))
     _run_method("Tesseract", result_dir / "tesseract.txt", ocr_tesseract, str(pdf))
     _run_method("Vision LLM (Claude)", result_dir / "vision_llm.txt", ocr_vision_llm, str(pdf))
     _run_method("Docling", result_dir / "docling.txt", ocr_docling, str(pdf))
@@ -166,7 +198,8 @@ def process_pdf(pdf_path: str) -> None:
 def _is_fully_processed(pdf: Path, results_base: Path) -> bool:
     d = results_base / pdf.stem
     return (
-        (d / "tesseract.txt").exists()
+        (d / "native.txt").exists()
+        and (d / "tesseract.txt").exists()
         and (d / "vision_llm.txt").exists()
         and (d / "docling.txt").exists()
     )
