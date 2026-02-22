@@ -1,8 +1,8 @@
 """
 OCR Comparison Script
 =====================
-Runs two OCR methods on every PDF in a given folder and saves the results for
-manual comparison. Already-processed files are skipped automatically.
+Runs three OCR methods on every PDF in a given folder and saves the results for
+manual comparison. Already-processed methods are skipped automatically per file.
 
 Usage (run from the project root):
     python scripts/quick_ocr_test.py <folder_with_pdfs>
@@ -14,12 +14,13 @@ Output:
     Results are written to test_documents/results/<pdf-stem>/
         tesseract.txt   -- text extracted by Tesseract (local, offline)
         vision_llm.txt  -- text extracted by Claude Vision (requires ANTHROPIC_API_KEY)
+        docling.txt     -- text extracted by Docling (local, offline)
 
-    A file is considered already processed when its result folder exists.
-    Re-run the script any time; only new PDFs will be processed.
+    Each method is run only if its output file does not yet exist, so re-running
+    the script will only fill in missing results.
 
 Requirements:
-    pip install pytesseract pdf2image anthropic python-dotenv
+    pip install pytesseract pdf2image anthropic python-dotenv docling
     Tesseract must be installed on the system (brew install tesseract on macOS).
     ANTHROPIC_API_KEY must be set in a .env file or the environment.
 """
@@ -122,29 +123,53 @@ def ocr_vision_llm(pdf_path: str) -> str | None:
     return "\n\n".join(f"--- Page {i} ---\n{text}" for i, text in enumerate(page_texts, start=1))
 
 
+def ocr_docling(pdf_path: str) -> str:
+    """Extract text from a PDF using Docling and return it as Markdown."""
+    from docling.document_converter import DocumentConverter
+    converter = DocumentConverter()
+    result = converter.convert(pdf_path)
+    return result.document.export_to_markdown()
+
+
+def _run_method(label: str, out_file: Path, fn, *args) -> None:
+    """Run an OCR method only if its output file does not exist yet."""
+    if out_file.exists():
+        print(f"\n--- {label} [skipped, already processed] ---")
+        return
+
+    print(f"\n--- {label} ---")
+    result = fn(*args)
+    if result:
+        print(result[:500])
+        out_file.write_text(result)
+    else:
+        print("(no output)")
+
+
 def process_pdf(pdf_path: str) -> None:
-    """Run both OCR methods on a single PDF and save results to disk."""
+    """Run all OCR methods on a single PDF, skipping any that were already run."""
     pdf = Path(pdf_path)
     print("=" * 60)
     print(f"📄 Testing: {pdf}")
     print("=" * 60)
 
-    print("\n--- Tesseract ---")
-    tess_result = ocr_tesseract(str(pdf))
-    print(tess_result[:500])
-
-    print("\n--- Vision LLM (Claude) ---")
-    llm_result = ocr_vision_llm(str(pdf))
-    if llm_result:
-        print(llm_result[:500])
-
-    # Save both outputs under test_documents/results/<stem>/ for manual review.
     result_dir = Path(f"test_documents/results/{pdf.stem}")
     result_dir.mkdir(parents=True, exist_ok=True)
-    (result_dir / "tesseract.txt").write_text(tess_result)
-    if llm_result:
-        (result_dir / "vision_llm.txt").write_text(llm_result)
+
+    _run_method("Tesseract", result_dir / "tesseract.txt", ocr_tesseract, str(pdf))
+    _run_method("Vision LLM (Claude)", result_dir / "vision_llm.txt", ocr_vision_llm, str(pdf))
+    _run_method("Docling", result_dir / "docling.txt", ocr_docling, str(pdf))
+
     print(f"\n✅ Results saved to {result_dir}/")
+
+
+def _is_fully_processed(pdf: Path, results_base: Path) -> bool:
+    d = results_base / pdf.stem
+    return (
+        (d / "tesseract.txt").exists()
+        and (d / "vision_llm.txt").exists()
+        and (d / "docling.txt").exists()
+    )
 
 
 if __name__ == "__main__":
@@ -162,11 +187,10 @@ if __name__ == "__main__":
         print(f"No PDF files found in '{folder}'")
         sys.exit(1)
 
-    # A PDF is considered processed when its result folder already exists.
     results_base = Path("test_documents/results")
-    pending = [pdf for pdf in pdfs if not (results_base / pdf.stem).is_dir()]
+    pending = [pdf for pdf in pdfs if not _is_fully_processed(pdf, results_base)]
 
-    print(f"Found {len(pdfs)} PDF(s) in '{folder}', {len(pdfs) - len(pending)} already processed, {len(pending)} pending\n")
+    print(f"Found {len(pdfs)} PDF(s) in '{folder}', {len(pdfs) - len(pending)} fully processed, {len(pending)} pending\n")
     if not pending:
         print("Nothing to do.")
         sys.exit(0)

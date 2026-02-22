@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Document Digitization Pipeline with AI-powered OCR"
 requires-python = ">=3.11"
 dependencies = [
+    "docling>=2.74.0",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
 ]
